@@ -133,7 +133,7 @@ class AIGameWindow(QMainWindow):
         slider = QSlider(Qt.Horizontal, self)
         slider.setFocusPolicy(Qt.NoFocus)
         slider.setMinimum(0)
-        slider.setMaximum(100)
+        slider.setMaximum(150)
         slider.setValue(0)
         slider.valueChanged.connect(self.setFrameRate)
 
@@ -203,13 +203,14 @@ class AIGameWindow(QMainWindow):
 
         #print('Set frame rate: %s' % value)
 
-        self.fpsLimit = int(value)
+        #self.fpsLimit = int(value)
+        self.fpsLimit = 50
 
         if value == 0:
             self.fpsLabel.setText("Manual")
             self.stepTimer.stop()
         else:
-            value = 5
+            #value = 50
             self.fpsLabel.setText("%s FPS" % value)
             self.stepTimer.setInterval(int(1000 / value))
             self.stepTimer.start()
@@ -223,6 +224,7 @@ class AIGameWindow(QMainWindow):
         self.resetEnv()
 
     def resetEnv(self):
+        #print("rollouts before resetting: {0}, size {1}".format([rollout for rollout in self.rollouts], len(self.rollouts)))
         seed = random.randint(0, 0xFFFFFFFF)
 
         self.env.seed(seed)
@@ -266,7 +268,7 @@ class AIGameWindow(QMainWindow):
             return
 
         seed = random.randint(0, 0xFFFFFFFF)
-        best_rollout = Rollout(0)
+        best_rollout = Rollout(0) #initialize a rollout object 
         num_success = 0
 
         for j in range(0, 100):
@@ -274,6 +276,10 @@ class AIGameWindow(QMainWindow):
 
             if rollout.total_reward > best_rollout.total_reward:
                 best_rollout = rollout
+                # Salem: I guess that a success should be whenever the baby gets the reward
+                # and not just when she gets the best reward. Idk
+                # num_success += 1
+            if rollout.total_reward > 0:
                 num_success += 1
 
         print('num success: %d' % num_success)
@@ -356,10 +362,14 @@ def main(argv):
     (options, args) = parser.parse_args()
 
     # Load the gym environment
+    print(options.env_name)
     env = gym.make(options.env_name)
-
+    print(env)
+    print(env.observation_space)
+    print(env.observation_space.spaces['image'])
+    print(env.action_space.n)
     model = Model(
-        env.observation_space.shape,
+        env.observation_space.spaces['image'].shape,
         env.action_space.n
     )
 

@@ -84,6 +84,11 @@ class Rollout:
         self.length += 1
         self.total_reward += reward
 
+    def __repr__(self):
+        return str({'total_reward': self.total_reward,
+                'all': {i: (self.obs[i]['image'].max(axis=0).max(axis=0), self.action[i], self.reward[i]) for i in range(self.length)}
+                })
+
 def random_rollout(env, seed):
     env.seed(seed)
     obs = env.reset()
