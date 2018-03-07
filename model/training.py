@@ -49,12 +49,14 @@ class Model(nn.Module):
 
         return action_probs
 
-    def select_action(self, obs):
+    def select_action(self, obs, sample=True):
         action_probs = self.forward(obs)
-
-        dist = Categorical(action_probs)
-        action = dist.sample()
-        #log_prob = dist.log_prob(action)
+        if sample:
+            dist = Categorical(action_probs)
+            action = dist.sample()
+            #log_prob = dist.log_prob(action)
+        else:
+            _, action = torch.max(action_probs, 1)
 
         return action.data[0]
 
@@ -69,13 +71,17 @@ class Model(nn.Module):
         return log_prob
 
 class Rollout:
-    def __init__(self, seed):
+    def __init__(self, seed=0, action=None, obs=None):
+        if action is None:
+            action = []
+        if obs is None:
+            obs = []
         self.seed = seed
-        self.obs = []
-        self.action = []
-        self.reward = []
-        self.length = 0
-        self.total_reward = 0
+        self.obs = obs
+        self.action = action
+        self.reward = [] if not action else [0] * (len(action) - 1) + [1000 - len(action)]
+        self.length = len(action)
+        self.total_reward = 0 if not action else 1000 - len(action)
 
     def append(self, obs, action, reward):
         self.obs.append(obs)
@@ -117,7 +123,7 @@ def equiv_rollout(env, r1):
         if len(r2.obs) <= len(r1.obs):
             return r2
 
-def run_model(model, env, seed, eps):
+def run_model(model, env, seed, eps=0, sample=True):
     env.seed(seed)
     obs = env.reset()
     rollout = Rollout(seed)
@@ -129,7 +135,7 @@ def run_model(model, env, seed, eps):
         if random.random() < eps:
             action = random.randint(0, env.action_space.n - 1)
         else:
-            action = model.select_action(obs)
+            action = model.select_action(obs, sample=sample)
 
         newObs, reward, done, info = env.step(action)
 
