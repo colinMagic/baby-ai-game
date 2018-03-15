@@ -19,16 +19,19 @@ from gym_minigrid import minigrid
 
 from model.training import selectAction
 
+
 class ImgWidget(QLabel):
     """
     Widget to intercept clicks on the full image view
     """
+
     def __init__(self, window):
         super().__init__()
         self.window = window
 
     def mousePressEvent(self, event):
         self.window.imageClick(event.x(), event.y())
+
 
 class AIGameWindow(QMainWindow):
     """Application window for the baby AI game"""
@@ -231,7 +234,8 @@ class AIGameWindow(QMainWindow):
 
         print('grid clicked: i=%d, j=%d' % (i, j))
 
-        desc, ok = QInputDialog.getText(self, 'Pointing & Naming', 'Enter Description:')
+        desc, ok = QInputDialog.getText(
+            self, 'Pointing & Naming', 'Enter Description:')
         desc = str(desc)
 
         if not ok or len(desc) == 0:
@@ -342,7 +346,7 @@ class AIGameWindow(QMainWindow):
 
     def stepEnv(self, action=None):
         # If no manual action was specified by the user
-        if action == None:
+        if action is None:
             action = selectAction(self.lastObs)
 
         obs, reward, done, info = self.env.step(action)
@@ -355,6 +359,9 @@ class AIGameWindow(QMainWindow):
 
         if self.curDemo:
             self.curDemo['numSteps'] += 1
+            self.curDemo['actions'].append(action)
+            img = obs['image'] if isinstance(obs, dict) else obs
+            self.curDemo['nextObservations'].append(img)
 
     def startDemo(self):
         assert self.curDemo is None
@@ -366,11 +373,17 @@ class AIGameWindow(QMainWindow):
 
         env.mission = mission
 
+        obs = self.env._genObs()
+        img = obs['image'] if isinstance(obs, dict) else obs
+
         self.curDemo = {
             'mission': mission,
-            'startPos' : env.agentPos,
+            'startPos': env.agentPos,
             'startGrid': env.grid.copy(),
-            'numSteps': 0
+            'startObservation': img,
+            'numSteps': 0,
+            'actions': [],
+            'nextObservations': []
         }
 
         # Set the focus on the full render image
@@ -423,6 +436,7 @@ class AIGameWindow(QMainWindow):
         # Set the steps remaining
         stepsRem = unwrapped.getStepsRemaining()
         self.stepsLabel.setText(str(stepsRem))
+
 
 def main(argv):
     parser = OptionParser()
