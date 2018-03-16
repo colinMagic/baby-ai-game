@@ -8,7 +8,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='RL')
     parser.add_argument('--algo', default='a2c',
                         help='algorithm to use: a2c | ppo | acktr')
-    parser.add_argument('--expName', default=False,
+    parser.add_argument('--missionName', default=False,
                         help='name of the experiment. default BabyAI_Exp...')
     parser.add_argument('--lr', type=float, default=7e-4,
                         help='learning rate (default: 7e-4)')
@@ -67,6 +67,7 @@ def get_args():
     parser.add_argument('--no-cuda', action='store_true', default=useCuda,
                         help='disables CUDA training')
     
+    
     parser.add_argument('--no-vis', action='store_true', default=False,
                         help='disables visdom visualization'),
     parser.add_argument('--useMissionAdvice', type=int, default=False,
@@ -93,10 +94,12 @@ def get_args():
                     help='name of the experiment you want to load')
     parser.add_argument('--policyID', default='MixPolicy',
                     help='name of the architecture you want to use')
-    parser.add_argument('--Teacher', default=True,
+    parser.add_argument('--Teacher', default=False,
                         help='indicate if the Teacher is present')
     parser.add_argument('--observeReward', default=True,
                         help='indicate if the agent observe the reward from the teacher at each timestep')
+    parser.add_argument('--levelName', default=False,
+                        help='Name of the level you are solving')
     
     
     args = parser.parse_args()

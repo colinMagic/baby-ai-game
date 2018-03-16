@@ -22,18 +22,18 @@ import torch.optim as optim
 from torch.autograd import Variable
 import json
 
-from arguments import get_args
-from vec_env.dummy_vec_env import DummyVecEnv
-from vec_env.subproc_vec_env import SubprocVecEnv
-from envs import make_env
-from kfac import KFACOptimizer
-from model import RecMLPPolicy, MLPPolicy, CNNPolicy,easyPolicy, UpSampled,MixPolicy
-from storage import RolloutStorage
-from visualize import visdom_plot
-import preProcess
+from pytorch_rl.vec_env.dummy_vec_env import DummyVecEnv
+from pytorch_rl.vec_env.subproc_vec_env import SubprocVecEnv
+from pytorch_rl.envs import make_env
+from pytorch_rl.kfac import KFACOptimizer
+from pytorch_rl.model import RecMLPPolicy, MLPPolicy, CNNPolicy,easyPolicy, UpSampled,MixPolicy
+from pytorch_rl.storage import RolloutStorage
+from pytorch_rl.visualize import visdom_plot
+import pytorch_rl.preProcess as preProcess
 import pickle
+from curriculum.curriculumArguments import get_args
 
-def solver(args):
+def solver(args=get_args()):
     '''
     This function works the same way than the main.py in pytorchRL
     It uses a dict as input argument 
@@ -64,22 +64,46 @@ def solver(args):
 # =============================================================================
 #     Create an appropriate folder to store the experiment, info...
 # =============================================================================
-    experimentNumber=0
-    if not args.expName is False:
-        experimentFolder=args.expName+'Exp{}'.format(experimentNumber)
+    #checking if the name of the level has already been taken
+    levelNumber=0
+
+    if args.levelName is False:
+        levelName='noNameLevel_Exp{}'.format(levelNumber)
     else:
-        experimentFolder='Exp{}'.format(experimentNumber)
+        levelName=args.levelName+'_Exp{}'.format(levelNumber)        
+        
+    save_path_1 = os.path.join(args.save_dir, levelName)
+    while os.path.exists(save_path_1):
+        print('previous level ID used : ', levelNumber)
+        levelNumber+=1
+        if args.levelName is False:
+            levelName='Exp{}'.format(levelNumber)
+        else:
+            levelName=args.levelName+'_Exp{}'.format(levelNumber) 
+        
+        save_path_1 = os.path.join(args.save_dir, levelName)
+    args.levelName=levelName
+        
+        
+        
+    experimentNumber=0
+
+    if not args.missionName is False:
+        experimentFolder=args.missionName+'_Exp{}'.format(experimentNumber)
+    else:
+        experimentFolder='noNameMission_Exp{}'.format(experimentNumber)
+           
     
-    save_path = os.path.join(args.save_dir, args.algo,experimentFolder)
+    save_path = os.path.join(save_path_1,args.algo,experimentFolder)
     while os.path.exists(save_path):
         print('previous experiment ID used : ', experimentNumber)
         experimentNumber+=1
-        if not args.expName is False:
-             experimentFolder=args.expName+'Exp{}'.format(experimentNumber)
+        if not args.missionName is False:
+             experimentFolder=args.missionName+'_Exp{}'.format(experimentNumber)
         else:
-            experimentFolder='Exp{}'.format(experimentNumber)
-        save_path = os.path.join(args.save_dir, args.algo,experimentFolder)
-        
+            experimentFolder='noNameMission_Exp{}'.format(experimentNumber)
+        save_path = os.path.join(save_path_1, args.algo,experimentFolder)
+    args.missionName=experimentFolder
         
     print('saving results in ',save_path)
     os.makedirs(save_path)
@@ -126,7 +150,7 @@ def solver(args):
 #     Generate a descriptor of the current experiment
 # =============================================================================
     descriptor=''
-    descriptor+='Experiment {} \n'.format(experimentFolder)
+    descriptor+='level {}, mission {} \n'.format(levelName,experimentFolder)
     descriptor+="experience done on : {} at {}  \n".format(time.strftime("%d/%m/%Y"),time.strftime("%H:%M:%S"))
     
     for i in vars(args):
@@ -150,7 +174,7 @@ def solver(args):
 
         else:
             print('using visdom on a linux server')
-            viz = Visdom(server=args.serverVisdom,port=args.portVisdom,env=experimentFolder)
+            viz = Visdom(server=args.serverVisdom,port=args.portVisdom,env=args.levelName+args.missionName)
         
         
         #plot a summary of the experiment on visdom
@@ -355,7 +379,10 @@ def solver(args):
     missions=torch.stack([preProcessor.stringEncoder('go to the green square') for dico in obsF])
     #id of the best actions computed by the teacher, they are not given to the agent,
     #but they are used to compute action statistics
-    bestActions=[dico['bestActions'] for dico in obsF ] 
+    
+    if args.Teacher:
+        bestActions=[dico['bestActions'] for dico in obsF ] 
+
 
     
     #bestActions=Variable(torch.stack( [ torch.Tensor(dico['bestActions']) for dico in obsF ] ))
@@ -588,8 +615,9 @@ def solver(args):
                 missions=missionsVariable
             )
             
-            #keep track of the numberOfActionAgent/Teacher
-            updateNumberOfActions(currentCount, action.data, bestActions)
+            if args.Teacher:
+                #keep track of the numberOfActionAgent/Teacher
+                updateNumberOfActions(currentCount, action.data, bestActions)
             
             #put the actions in a convenient format
             cpu_actions = action.data.squeeze(1).cpu().numpy()
@@ -908,3 +936,5 @@ def solver(args):
                 numberOfSuccess=0
     
 
+if __name__=='__main__':
+    solver()

@@ -1,10 +1,15 @@
 import torch
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
-
+import pytorch_rl.preProcess
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space, state_size):
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, state_size,maxSizeOfMissions):
         self.observations = torch.zeros(num_steps + 1, num_processes, *obs_shape)
+        
+        self.maxSizeOfMissions=maxSizeOfMissions
+        self.missions=torch.zeros(num_steps + 1, num_processes, maxSizeOfMissions)
+        
+        
         self.states = torch.zeros(num_steps + 1, num_processes, state_size)
         self.rewards = torch.zeros(num_steps, num_processes, 1)
         self.value_preds = torch.zeros(num_steps + 1, num_processes, 1)
@@ -18,9 +23,11 @@ class RolloutStorage(object):
         if action_space.__class__.__name__ == 'Discrete':
             self.actions = self.actions.long()
         self.masks = torch.ones(num_steps + 1, num_processes, 1)
+        self.num_processes=num_processes
 
     def cuda(self):
         self.observations = self.observations.cuda()
+        self.missios=self.missions.cuda()
         self.states = self.states.cuda()
         self.rewards = self.rewards.cuda()
         self.value_preds = self.value_preds.cuda()
@@ -29,8 +36,9 @@ class RolloutStorage(object):
         self.actions = self.actions.cuda()
         self.masks = self.masks.cuda()
 
-    def insert(self, step, current_obs, state, action, action_log_prob, value_pred, reward, mask):
+    def insert(self, step, current_obs, current_mission,state, action, action_log_prob, value_pred, reward, mask):
         self.observations[step + 1].copy_(current_obs)
+        self.missions[step + 1].copy_(current_mission)
         self.states[step + 1].copy_(state)
         self.actions[step].copy_(action)
         self.action_log_probs[step].copy_(action_log_prob)
@@ -40,6 +48,7 @@ class RolloutStorage(object):
 
     def after_update(self):
         self.observations[0].copy_(self.observations[-1])
+        self.missions[0].copy_(self.missions[-1])
         self.states[0].copy_(self.states[-1])
         self.masks[0].copy_(self.masks[-1])
 
@@ -71,6 +80,11 @@ class RolloutStorage(object):
 
             observations_batch = self.observations[:-1].view(-1,
                                         *self.observations.size()[2:])[indices]
+            
+            missions_batch = self.missions[:-1].view(-1,
+                                        *self.missions.size()[2:])[indices]
+            
+            
             states_batch = self.states[:-1].view(-1, self.states.size(-1))[indices]
             actions_batch = self.actions.view(-1, self.actions.size(-1))[indices]
             return_batch = self.returns[:-1].view(-1, 1)[indices]
@@ -78,7 +92,7 @@ class RolloutStorage(object):
             old_action_log_probs_batch = self.action_log_probs.view(-1, 1)[indices]
             adv_targ = advantages.view(-1, 1)[indices]
 
-            yield observations_batch, states_batch, actions_batch, \
+            yield observations_batch, missions_batch, states_batch, actions_batch, \
                 return_batch, masks_batch, old_action_log_probs_batch, adv_targ
 
     def recurrent_generator(self, advantages, num_mini_batch):
@@ -87,6 +101,7 @@ class RolloutStorage(object):
         perm = torch.randperm(num_processes)
         for start_ind in range(0, num_processes, num_envs_per_batch):
             observations_batch = []
+            missions_batch=[]
             states_batch = []
             actions_batch = []
             return_batch = []
@@ -97,6 +112,7 @@ class RolloutStorage(object):
             for offset in range(num_envs_per_batch):
                 ind = perm[start_ind + offset]
                 observations_batch.append(self.observations[:-1, ind])
+                missions_batch.append(self.missions[:-1, ind])
                 states_batch.append(self.states[0:1, ind])
                 actions_batch.append(self.actions[:, ind])
                 return_batch.append(self.returns[:-1, ind])
@@ -105,6 +121,8 @@ class RolloutStorage(object):
                 adv_targ.append(advantages[:, ind])
 
             observations_batch = torch.cat(observations_batch, 0)
+            missions_batch = torch.cat(missions_batch, 0)
+
             states_batch = torch.cat(states_batch, 0)
             actions_batch = torch.cat(actions_batch, 0)
             return_batch = torch.cat(return_batch, 0)
@@ -112,5 +130,5 @@ class RolloutStorage(object):
             old_action_log_probs_batch = torch.cat(old_action_log_probs_batch, 0)
             adv_targ = torch.cat(adv_targ, 0)
 
-            yield observations_batch, states_batch, actions_batch, \
+            yield observations_batch, missions_batch, states_batch, actions_batch, \
                 return_batch, masks_batch, old_action_log_probs_batch, adv_targ

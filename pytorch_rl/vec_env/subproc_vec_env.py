@@ -1,23 +1,47 @@
 import numpy as np
 from multiprocessing import Process, Pipe
-from vec_env import VecEnv, CloudpickleWrapper
+from pytorch_rl.vec_env import VecEnv, CloudpickleWrapper
 
 def worker(remote, parent_remote, env_fn_wrapper):
     parent_remote.close()
     env = env_fn_wrapper.x()
     while True:
-        cmd, data = remote.recv()
+        commands = remote.recv()
+        cmd, data =commands[0],commands[1]
         if cmd == 'step':
-            ob, reward, done, info = env.step(data)
+            try:
+                observeReward=commands[2]
+                #print('using sent observeReward')
+            except:
+                #print('no third option in command')
+                observeReward=True
+            #print('final ObsReward', observeReward)
+            
+            
+            env.env.observeReward=observeReward
+            
+            ob, reward, done, info = env.step(data)#,observeReward=False)
+            
+            #print('after step', env.env.observeReward)
             if done:
                 ob = env.reset()
             remote.send((ob, reward, done, info))
         elif cmd == 'reset':
             ob = env.reset()
+            
+            #txt=env.advice
+            #print(txt)
+            
             remote.send(ob)
+            
+       
+            
+            
         elif cmd == 'reset_task':
             ob = env.reset_task()
             remote.send(ob)
+            
+            
         elif cmd == 'close':
             remote.close()
             break
@@ -32,6 +56,7 @@ class SubprocVecEnv(VecEnv):
         """
         envs: list of gym environments to run in subprocesses
         """
+        self.envs=[fn() for fn in env_fns[0:1]]
         self.waiting = False
         self.closed = False
         nenvs = len(env_fns)
@@ -48,9 +73,9 @@ class SubprocVecEnv(VecEnv):
         observation_space, action_space = self.remotes[0].recv()
         VecEnv.__init__(self, len(env_fns), observation_space, action_space)
 
-    def step_async(self, actions):
+    def step_async(self, actions,observeReward):
         for remote, action in zip(self.remotes, actions):
-            remote.send(('step', action))
+            remote.send(('step', action,observeReward))
         self.waiting = True
 
     def step_wait(self):
@@ -63,6 +88,11 @@ class SubprocVecEnv(VecEnv):
         for remote in self.remotes:
             remote.send(('reset', None))
         return np.stack([remote.recv() for remote in self.remotes])
+    
+    def getText(self):
+        for remote in self.remotes:
+            remote.send(('getText', None))
+        #return np.stack([remote.recv() for remote in self.remotes])
 
     def reset_task(self):
         for remote in self.remotes:

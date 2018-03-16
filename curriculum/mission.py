@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import phrasing 
-import environmentGenerator
+import envGenerator
 import vocab
 
 
@@ -35,7 +35,7 @@ class Mission(object):
                  diversityDifficulty=False):
         self.sequenceOfUnitaryMissions=sequenceOfUnitaryMissions
         self.expression=phrasing.mission2seq(sequenceOfUnitaryMissions)
-        self.suitedEnv=environmentGenerator.generateEnv(self)
+        self.suitedEnv=envGenerator.generateEnv(self)
         
     
 

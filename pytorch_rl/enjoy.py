@@ -8,60 +8,115 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 from vec_env.dummy_vec_env import DummyVecEnv
+import preProcess
 
 from envs import make_env
+from arguments import get_args
+args = get_args()
 
-parser = argparse.ArgumentParser(description='RL')
-parser.add_argument('--seed', type=int, default=1,
-                    help='random seed (default: 1)')
-parser.add_argument('--num-stack', type=int, default=1,
-                    help='number of frames to stack (default: 1)')
-parser.add_argument('--log-interval', type=int, default=10,
-                    help='log interval, one log per n updates (default: 10)')
-parser.add_argument('--env-name', default='PongNoFrameskip-v4',
-                    help='environment to train on (default: PongNoFrameskip-v4)')
-parser.add_argument('--load-dir', default='./trained_models/',
-                    help='directory to save agent logs (default: ./trained_models/)')
-args = parser.parse_args()
 
-env = make_env(args.env_name, args.seed, 0, None)
+env = make_env(args.env_name, args.seed, 0,useTeacher=True)
 env = DummyVecEnv([env])
 
-actor_critic, ob_rms = torch.load(os.path.join(args.load_dir, args.env_name + ".pt"))
+fileToLoad=os.path.join(args.load_dir, args.nameExpToLoad, args.env_name + ".pt")
+print('file to load : ', fileToLoad)
+actor_critic, ob_rms = torch.load(fileToLoad)
 
 render_func = env.envs[0].render
 
 obs_shape = env.observation_space.shape
 obs_shape = (obs_shape[0] * args.num_stack, *obs_shape[1:])
+
 current_obs = torch.zeros(1, *obs_shape)
+
+maxSizeOfMissionsSelected=args.sentenceEmbeddingDimension
+preProcessor=preProcess.PreProcessor(maxSizeOfMissionsSelected)
+current_missions=torch.zeros(1, maxSizeOfMissionsSelected)
+
 states = torch.zeros(1, actor_critic.state_size)
 masks = torch.zeros(1, 1)
 
-def update_current_obs(obs):
-    shape_dim0 = env.observation_space.shape[0]
-    obs = torch.from_numpy(obs).float()
-    if args.num_stack > 1:
-        current_obs[:, :-shape_dim0] = current_obs[:, shape_dim0:]
-    current_obs[:, -shape_dim0:] = obs
+#def update_current_obs(obs):
+#    obs=obs[0]['image']
+#    shape_dim0 = env.observation_space.shape[0]
+#    obs = torch.from_numpy(obs).float()
+#    if args.num_stack > 1:
+#        current_obs[:, :-shape_dim0] = current_obs[:, shape_dim0:]
+#    current_obs[:, -shape_dim0:] = obs
+
+def update_current_obs(obs,missions):
+        #print('top')
+        shape_dim0 = env.observation_space.shape[0]
+        #img,txt = torch.from_numpy(np.stack(obs[:,0])).float(),np.stack(obs[:,1])
+
+        images = torch.from_numpy(obs)
+        if args.num_stack > 1:
+            current_obs[:, :-shape_dim0] = current_obs[:, shape_dim0:]
+        current_obs[:, -shape_dim0:] = images
+        current_missions = missions
 
 render_func('human')
-obs = env.reset()
-update_current_obs(obs)
 
+
+obsF = env.reset()
+obs=np.array([preProcessor.preProcessImage(dico['image']) for dico in obsF])
+missions=torch.stack([preProcessor.stringEncoder('go to the green square') for dico in obsF])
+    
+    
+update_current_obs(obs,missions)
+
+
+step=0
+allowObserveReward=False
+  
 while True:
+    useAdviceFromTeacher=False
+    if not args.useMissionAdvice == False:
+        if step%args.useMissionAdvice==0:
+            useAdviceFromTeacher=True    
+    step+=1
+    
+       
+    
+    
+    
+    #preprocess the missions to be used by the model
+    missionsAsStrings=preProcessor.Code2String(missions)
+    #print('mission',missionsAsStrings)
+    #print('missions', missionsAsStrings)
+    #then use the language model of our choice
+    missionsEmbedded=preProcessor.simpleSentenceEmbedding(missionsAsStrings)
+    #print('embedding:', missionsEmbedded)
+    #print('   ')
+    #convert them as Variables
+    missionsVariable=Variable(missionsEmbedded,volatile=True)
+       
+        
+                
     value, action, _, states = actor_critic.act(
         Variable(current_obs, volatile=True),
         Variable(states, volatile=True),
         Variable(masks, volatile=True),
-        deterministic=True
+        deterministic=True,
+        missions=missionsVariable
     )
     states = states.data
     cpu_actions = action.data.squeeze(1).cpu().numpy()
 
     # Observation, reward and next obs
-    obs, reward, done, _ = env.step(cpu_actions)
+    obsF, reward, done, _ = env.step(cpu_actions,observeReward=True)
+    obs=np.array([preProcessor.preProcessImage(dico['image']) for dico in obsF])
+    
+#    if useAdviceFromTeacher:
+#        missions=torch.stack([preProcessor.stringEncoder(dico['mission']) for dico in obsF])
+#    else:
+#        missions=torch.stack([preProcessor.stringEncoder('go to the goal') for dico in obsF])
+    missions=torch.stack([preProcessor.stringEncoder('go to the green square') for dico in obsF])
 
-    time.sleep(0.05)
+    bestActions=Variable(torch.stack( [ torch.Tensor(dico['bestActions']) for dico in obsF ] ))
+            
+
+    #time.sleep(0.05)
 
     masks.fill_(0.0 if done else 1.0)
 
@@ -69,7 +124,9 @@ while True:
         current_obs *= masks.unsqueeze(2).unsqueeze(2)
     else:
         current_obs *= masks
-    update_current_obs(obs)
+    current_missions *= masks
+
+    update_current_obs(obs,missions)
 
     renderer = render_func('human')
 

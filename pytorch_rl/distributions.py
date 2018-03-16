@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from utils import AddBias
+from pytorch_rl.utils import AddBias
 
 
 class Categorical(nn.Module):
@@ -20,8 +20,9 @@ class Categorical(nn.Module):
         x = self(x)
 
         probs = F.softmax(x, dim=1)
+        #print(probs.data.numpy())
         if deterministic is False:
-            action = probs.multinomial()
+            action = probs.multinomial(1)
         else:
             action = probs.max(1, keepdim=True)[1]
         return action
