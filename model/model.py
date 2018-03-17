@@ -10,20 +10,49 @@ from .modules import *
 from .utils import State
 
 
-class Model(nn.Module):
+class PolicyInterface(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, inputs, states, masks):
+        raise NotImplementedError
+
+    def hasRecurrence(self):
+        raise NotImplementedError
+
+    def hidden_state_shape(self):
+        """
+        Size of the recurrent state of the model (propagated between steps)
+        """
+        raise NotImplementedError
+
+    def act(self, inputs, states, masks, deterministic=False):
+        value, x, states = self(inputs, states, masks)
+        action = self.dist.sample(x, deterministic=deterministic)
+        action_log_probs, dist_entropy = self.dist.logprobs_and_entropy(
+            x, action)
+        return value, action, action_log_probs, states
+
+    def evaluate_actions(self, inputs, states, masks, actions):
+        value, x, states = self(inputs, states, masks)
+        action_log_probs, dist_entropy = self.dist.logprobs_and_entropy(
+            x, actions)
+        return value, action_log_probs, dist_entropy, states
+
+
+class PolicyModel(PolicyInterface):
 
     def __init__(self, img_shape, action_space,
                  channels=[3, 1], kernels=[8], strides=None, langmod=False,
                  vocab_size=10, embed_dim=128, langmod_hidden_size=128,
                  actmod_hidden_size=256,
                  policy_hidden_size=128,
-                 tae=False,
-                 langmod_pred=False,
-                 visual_classifier=False,
-                 rew_pred=False,
-                 num_frames_reward_prediction=3,
                  **kwargs):
-        super(Model, self).__init__()
+        super(PolicyModel, self).__init__()
+
+        assert action_space.__class__.__name__ == "Discrete"
+        action_space = action_space.n
 
         # Vision module
         self.vision = VisionModule(channels, kernels, strides)
@@ -51,154 +80,73 @@ class Model(nn.Module):
             action_space=action_space,
             input_size=actmod_hidden_size, hidden_size=policy_hidden_size)
 
-        # Naming and Pointing Classifier
-        self.visualTextClassifier = None
-        if visual_classifier:
-            self.visualTextClassifier = VisualTargetClassification(
-                self.vision, self.language, self.mixing,
-                vision_encoded_shape=vision_encoded_shape,
-                language_encoded_size=langmod_hidden_size
-            )
+        self.dist = self.policy
+        self.policyWithoutDirectActionComputation = True
 
-        # Auxiliary networks
-        self.tAE = None
-        if tae:
-            self.tAE = TemporalAutoEncoder(
-                self.policy, self.vision,
-                input_size=policy_hidden_size,
-                vision_encoded_shape=vision_encoded_shape
-            )
-        self.language_predictor = None
-        if langmod and langmod_pred:
-            self.language_predictor = LanguagePrediction(
-                self.language, self.vision,
-                vision_encoded_shape=vision_encoded_shape,
-                hidden_size=langmod_hidden_size
-            )
-        self.reward_predictor = None
-        if rew_pred:
-            self.reward_predictor = RewardPrediction(
-                self.vision, self.language, self.mixing,
-                num_elts=num_frames_reward_prediction,
-                vision_encoded_shape=vision_encoded_shape,
-                language_encoded_size=langmod_hidden_size
-            )
+    def hasRecurrence(self):
+        return True
 
-    def reset_hidden_states(self):
-        self.action.reset_hidden_states()
+    def hidden_state_shape(self):
+        return self.action.hidden_state_shape()
 
-    def detach_hidden_states(self):
-        self.action.detach_hidden_states()
-
-    def mask_hidden_states(self, h, mask):
-        if h is None:
-            return None
-        if mask is None:
-            return h
-        if isinstance(h, torch.autograd.Variable):
-            return h * mask
-        else:
-            return tuple(self.mask_hidden_states(v, mask) for v in h)
-
-    def size_hidden_states(self, h, dim=0):
-        if isinstance(h, torch.autograd.Variable):
-            return h.size(dim)
-        else:
-            return self.size_hidden_states(h[0], dim)
-
-    def compute_input_lenght_from_padding(self, x, pad_sym=0):
-        mask = x.data.eq(pad_sym)
-        x_len = x.size(1) - torch.sum(mask, dim=1)
-        x_len = x_len.int()
-        return x_len.tolist()
-
-    def forward(self, x):
+    def forward(self, x, hidden_states=None, mask=None):
         '''
         Argument:
 
-            img: environment image, shape [batch_size, 84, 84, 3]
-            instruction: natural language instruction [batch_size, seq]
+        x:
+            image: environment image, shape [batch_size, 84, 84, 3]
+            mission: natural language instruction [batch_size, seq]
+            missionlen: len of each instruction [batch_size, 1]
+
+        hidden_states: hidden state of the network
+        mask: mask to be used
+
         '''
 
         vision_out = self.vision(x.image)
         language_out = None
         if not (self.language is None):
-            mission_len = self.compute_input_lenght_from_padding(x.mission)
             language_out = self.language.forward_reordering(
-                x.mission, mission_len)
-        mix_out = self.mixing(vision_out, language_out)
-        action_out = self.action(mix_out)
-
-        action_prob, value = self.policy(action_out)
-
-        return action_prob, value
-
-    def forward_with_hidden_states(self, x, hidden_states=None, mask=None):
-        '''
-        Argument:
-
-            img: environment image, shape [batch_size, 84, 84, 3]
-            instruction: natural language instruction [batch_size, seq]
-        '''
-
-        vision_out = self.vision(x.image)
-        language_out = None
-        if not (self.language is None):
-            mission_len = self.compute_input_lenght_from_padding(x.mission)
-            language_out = self.language.forward_reordering(
-                x.mission, mission_len)
+                x.mission, x.missionlen)
 
         mix_out = self.mixing(vision_out, language_out)
 
         if hidden_states is None:
-            action_out, hidden_states = self.action.forward_with_hidden_states(
-                mix_out, hidden_states)
+            action_out, hidden_states = self.action(mix_out, hidden_states)
         else:
-            if mix_out.size(0) == self.size_hidden_states(hidden_states, 1):
+            if mix_out.size(0) == hidden_states.size(0):
                 if mask is not None:
-                    hidden_states = self.mask_hidden_states(
-                        hidden_states, mask)
-                action_out, hidden_states = self.action.forward_with_hidden_states(
-                    mix_out, hidden_states)
+                    shape = hidden_states.size()
+                    hidt = hidden_states.view(hidden_states.size(0), -1) * mask
+                    hidden_states = hidt.view(shape)
+                action_out, hidden_states = self.action(mix_out, hidden_states)
             else:
                 mix_out = mix_out.view(
                     -1,
-                    self.size_hidden_states(hidden_states, 1),
-                    mix_out.size(1))
+                    hidden_states.size(0),
+                    mix_out.size(1)
+                )
                 if mask is not None:
-                    mask = mask.view(
-                        -1, self.size_hidden_states(hidden_states, 1), 1)
+                    mask = mask.view(-1, hidden_states.size(0), 1)
                 outputs = []
                 for i in range(mix_out.size(0)):
                     if mask is not None:
-                        hidden_states = self.mask_hidden_states(
-                            hidden_states, mask[i])
-                    act_out_i, hidden_states = self.action.forward_with_hidden_states(
-                        mix_out[i], hidden_states)
+                        shape = hidden_states.size()
+                        hidt = hidden_states.view(
+                            hidden_states.size(0), -1
+                        ) * mask[i]
+                        hidden_states = hidt.view(shape)
+                    act_out_i, hidden_states = self.action(
+                        mix_out[i],
+                        hidden_states
+                    )
                     outputs.append(act_out_i)
 
                 action_out = torch.cat(outputs, 0)
 
-        action_prob, value = self.policy(action_out)
+        if self.policyWithoutDirectActionComputation:
+            actionProb, value = self.policy.forward_without_actions(action_out)
+        else:
+            actionProb, value = self.policy(action_out)
 
-        return action_prob, value, hidden_states
-
-    def value_replay_predictor(self, x, hidden_states=None):
-        '''
-        Argument:
-
-            img: environment image, shape [batch_size, 84, 84, 3]
-            instruction: natural language instruction [batch_size, seq]
-        '''
-
-        vision_out = self.vision(x.image)
-        language_out = None
-        if not (self.language is None):
-            language_out = self.language(x.mission)
-        mix_out = self.mixing(vision_out, language_out)
-        action_out, hidden_states = self.action.forward_with_hidden_states(
-            mix_out, hidden_states)
-
-        action_prob, value = self.policy(action_out)
-
-        return action_prob, value, hidden_states
+        return value, actionProb, hidden_states

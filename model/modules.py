@@ -144,8 +144,22 @@ class LanguageModule(nn.Module):
         return sorted_x, inputs_len, sorted_index
 
     def forward_reordering(self, x, input_lengths):
-        if len(set(input_lengths)) == 1:
+        if input_lengths is None:
             return self(x)
+
+        if isinstance(input_lengths, torch.autograd.Variable):
+            set_inputs = set(input_lengths.view(-1).cpu().data.tolist())
+            input_lengths = input_lengths.view(-1).cpu().data.tolist()
+        elif isinstance(input_lengths, torch.Tensor):
+            set_inputs = set(input_lengths.view(-1).cpu().tolist())
+            input_lengths = input_lengths.view(-1).cpu().tolist()
+        else:
+            set_inputs = set(input_lengths)
+
+        if len(set_inputs) == 1:
+            list_set_inputs = list(set_inputs)
+            size = list_set_inputs[0]
+            return self(x[:, 0:size])
         else:
             sorted_x, inputs_len, sorted_index = self.sort_data(
                 x, input_lengths)
@@ -221,17 +235,10 @@ class ActionModule(nn.Module):
         super(ActionModule, self).__init__()
         self.hidden_size = hidden_size
 
-        self.lstm_1 = nn.LSTM(
-            input_size=input_size, hidden_size=hidden_size, batch_first=True)
-        self.lstm_2 = nn.LSTM(
-            input_size=hidden_size, hidden_size=hidden_size, batch_first=True)
-
-        self.hidden_1 = None
-        self.hidden_2 = None
-
-    def reset_hidden_states(self):
-        self.hidden_1 = None
-        self.hidden_2 = None
+        self.lstm_1 = nn.LSTMCell(
+            input_size=input_size, hidden_size=hidden_size)
+        self.lstm_2 = nn.LSTMCell(
+            input_size=hidden_size, hidden_size=hidden_size)
 
     def repackage_hidden(self, h):
         """ Wraps hidden states in new Variables,
@@ -242,79 +249,151 @@ class ActionModule(nn.Module):
         else:
             return tuple(self.repackage_hidden(v) for v in h)
 
-    def detach_hidden_states(self):
-        if not self.hidden_1 is None:
-            self.hidden_1 = self.repackage_hidden(self.hidden_1)
-        if not self.hidden_2 is None:
-            self.hidden_2 = self.repackage_hidden(self.hidden_2)
+    def hidden_state_shape(self):
+        return (2, 2, self.hidden_size)
 
-    # def detach_hidden_states(self):
-    #     if not self.hidden_1 is None:
-    #         self.hidden_1 = (l.detach() for l in self.hidden_1)
-    #     if not self.hidden_2 is None:
-    #         self.hidden_2 = (l.detach() for l in self.hidden_2)
-
-    def forward(self, x):
+    def forward(self, x, hidden_states=None):
         '''
             Argument:
                 x: x is output from the Mixing Module, as shape [batch_size, 1, 3264]
         '''
         # Feed forward
-        if x.dim() == 2:
-            x = x.view(x.size(0), 1, x.size(1))
+        assert x.dim() == 2, 'the dimension of x should be 2'
 
-        _, s1 = self.lstm_1(x, self.hidden_1)
-        h1, c1 = s1
-
-        x1 = h1.transpose(0, 1).view(h1.size(1), 1, -1)
-
-        _, s2 = self.lstm_2(x1, self.hidden_2)
-        h2, c2 = s2
-
-        # Update current hidden state
-        self.hidden_1 = (h1, c1)
-        self.hidden_2 = (h2, c2)
-
-        # Return the hidden state of the upper layer
-        x2 = h2.transpose(0, 1).view(h2.size(1), -1)
-        return x2
-
-    def forward_with_hidden_states(self, x, hidden_states=None):
-        '''
-            Argument:
-                x: x is output from the Mixing Module, as shape [batch_size, 1, 3264]
-        '''
-        # Feed forward
-        if x.dim() == 2:
-            x = x.view(x.size(0), 1, x.size(1))
+        hidden_size = self.hidden_size
 
         if hidden_states is None:
-            hidden_states_1 = None
-            hidden_states_2 = None
+            hidden_states_1 = (
+                Variable(torch.zeros(x.size(0), hidden_size).type_as(x.data)),
+                Variable(torch.zeros(x.size(0), hidden_size).type_as(x.data))
+            )
+            hidden_states_2 = (
+                Variable(torch.zeros(x.size(0), hidden_size).type_as(x.data)),
+                Variable(torch.zeros(x.size(0), hidden_size).type_as(x.data))
+            )
         else:
-            hidden_states_1, hidden_states_2 = hidden_states
+            # batch_size, 2, 2, self.hidden_size
+            hidden_states_1 = hidden_states[:, 0]
+            hidden_states_2 = hidden_states[:, 1]
 
-        _, s1 = self.lstm_1(x, hidden_states_1)
-        h1, c1 = s1
+            hidden_states_1 = (hidden_states_1[:, 0], hidden_states_1[:, 1])
+            hidden_states_2 = (hidden_states_2[:, 0], hidden_states_2[:, 1])
 
-        x1 = h1.transpose(0, 1).view(h1.size(1), 1, -1)
+        h1, c1 = self.lstm_1(x, hidden_states_1)
 
-        _, s2 = self.lstm_2(x1, hidden_states_2)
-        h2, c2 = s2
+        h2, c2 = self.lstm_2(h1, hidden_states_2)
+
+        x2 = h2
 
         # Update current hidden state
-        hidden_states_1 = (h1, c1)
-        hidden_states_2 = (h2, c2)
+        hidden_states_1 = torch.cat([h1.unsqueeze(1), c1.unsqueeze(1)], dim=1)
+        hidden_states_2 = torch.cat([h2.unsqueeze(1), c2.unsqueeze(1)], dim=1)
+
+        states = torch.cat(
+            [hidden_states_1.unsqueeze(1), hidden_states_2.unsqueeze(1)],
+            dim=1
+        )
 
         # Return the hidden state of the upper layer
-        x2 = h2.transpose(0, 1).view(h2.size(1), -1)
-        return x2, (hidden_states_1, hidden_states_2)
+        return x2, states
 
 # We should do a ConditionalBatchNormModule, ClassifierModule, HistoricalRNN Module
 # RL Module
 
 
 SavedAction = namedtuple('SavedAction', ['action', 'value'])
+
+
+class Categorical(nn.Module):
+
+    def __init__(self, num_inputs, num_outputs):
+        super(Categorical, self).__init__()
+        self.linear = nn.Linear(num_inputs, num_outputs)
+
+    def forward(self, x):
+        x = self.linear(x)
+        return x
+
+    def sample(self, x, deterministic):
+        x = self(x)
+
+        probs = F.softmax(x, dim=1)
+        if deterministic is False:
+            action = probs.multinomial()
+        else:
+            action = probs.max(1, keepdim=True)[1]
+        return action
+
+    def logprobs_and_entropy(self, x, actions):
+        x = self(x)
+
+        log_probs = F.log_softmax(x, dim=1)
+        probs = F.softmax(x, dim=1)
+
+        action_log_probs = log_probs.gather(1, actions)
+
+        dist_entropy = -(log_probs * probs).sum(-1).mean()
+        return action_log_probs, dist_entropy
+
+
+class AddBias(nn.Module):
+
+    def __init__(self, bias):
+        super(AddBias, self).__init__()
+        self._bias = nn.Parameter(bias.unsqueeze(1))
+
+    def forward(self, x):
+        if x.dim() == 2:
+            bias = self._bias.t().view(1, -1)
+        else:
+            bias = self._bias.t().view(1, -1, 1, 1)
+
+        return x + bias
+
+
+class DiagGaussian(nn.Module):
+
+    def __init__(self, num_inputs, num_outputs):
+        super(DiagGaussian, self).__init__()
+        self.fc_mean = nn.Linear(num_inputs, num_outputs)
+        self.logstd = AddBias(torch.zeros(num_outputs))
+
+    def forward(self, x):
+        action_mean = self.fc_mean(x)
+
+        #  An ugly hack for my KFAC implementation.
+        zeros = Variable(torch.zeros(action_mean.size()), volatile=x.volatile)
+        if x.is_cuda:
+            zeros = zeros.cuda()
+
+        action_logstd = self.logstd(zeros)
+        return action_mean, action_logstd
+
+    def sample(self, x, deterministic):
+        action_mean, action_logstd = self(x)
+
+        action_std = action_logstd.exp()
+
+        if deterministic is False:
+            noise = Variable(torch.randn(action_std.size()))
+            if action_std.is_cuda:
+                noise = noise.cuda()
+            action = action_mean + action_std * noise
+        else:
+            action = action_mean
+        return action
+
+    def logprobs_and_entropy(self, x, actions):
+        action_mean, action_logstd = self(x)
+
+        action_std = action_logstd.exp()
+
+        action_log_probs = -0.5 * ((actions - action_mean) / action_std).pow(
+            2) - 0.5 * math.log(2 * math.pi) - action_logstd
+        action_log_probs = action_log_probs.sum(-1, keepdim=True)
+        dist_entropy = 0.5 + 0.5 * math.log(2 * math.pi) + action_logstd
+        dist_entropy = dist_entropy.sum(-1).mean()
+        return action_log_probs, dist_entropy
 
 
 class Policy(nn.Module):
@@ -324,7 +403,7 @@ class Policy(nn.Module):
         self.action_space = action_space
 
         self.affine1 = nn.Linear(input_size, hidden_size)
-        self.action_head = nn.Linear(hidden_size, action_space)
+        self.action_head = Categorical(hidden_size, action_space)
         self.value_head = nn.Linear(hidden_size, 1)
 
         self.saved_actions = []
@@ -336,6 +415,18 @@ class Policy(nn.Module):
         state_values = self.value_head(x)
 
         return action_scores, state_values
+
+    def forward_without_actions(self, x):
+        x = F.relu(self.affine1(x))
+        state_values = self.value_head(x)
+
+        return x, state_values
+
+    def sample(self, x, deterministic):
+        return self.action_head.sample(x, deterministic)
+
+    def logprobs_and_entropy(self, x, actions):
+        return self.action_head.logprobs_and_entropy(x, actions)
 
     def tAE(self, action_logits):
         '''
@@ -349,13 +440,13 @@ class Policy(nn.Module):
                 module corresponding to the policy (action_head)
         '''
         bias = torch.unsqueeze(
-            self.action_head.bias, 0).repeat(
+            self.action_head.linear.bias, 0).repeat(
             action_logits.size()[0], 1)
 
         output = action_logits - bias
         output = F.linear(
             output, torch.transpose(
-                self.action_head.weight, 0, 1))
+                self.action_head.linear.weight, 0, 1))
 
         return output
 

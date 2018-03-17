@@ -20,6 +20,8 @@ def get_args():
         help='gym environment to load')
     parser.add_argument('--gamma', type=float, default=0.99, metavar='G',
                         help='discount factor (default: 0.99)')
+    parser.add_argument('--use-gae', action='store_true', default=False,
+                        help='use generalized advantage estimation')
     parser.add_argument('--tau', type=float, default=0.95,
                         help='parameter for GAE (default: 0.95)')
     parser.add_argument('--value-loss-coef', type=float, default=0.5,
@@ -75,23 +77,24 @@ def get_args():
     parser.add_argument('--no-vis', action='store_true', default=False,
                         help='disables visdom visualization')
 
+    parser.add_argument('--num-stack', type=int, default=1,
+                        help='number of frames to stack (default: 1)')
+
     parser.add_argument('--algo', default='a2c',
                         help='algorithm to use: a2c | ppo | acktr')
 
+    parser.add_argument('--ppo-epoch', type=int, default=4,
+                        help='number of ppo epochs (default: 4)')
+    parser.add_argument('--ppo-num-mini-batch', type=int, default=32,
+                        help='number of batches for ppo (default: 32)')
+    parser.add_argument('--ppo-clip-param', type=float, default=0.2,
+                        help='ppo clip parameter (default: 0.2)')
+
+    #
     parser.add_argument('--eps', type=float, default=1e-5,
                         help='RMSprop optimizer epsilon (default: 1e-5)')
     parser.add_argument('--alpha', type=float, default=0.99,
                         help='RMSprop optimizer apha (default: 0.99)')
-    parser.add_argument('--use-gae', action='store_true', default=False,
-                        help='use generalized advantage estimation')
-    parser.add_argument('--ppo-epoch', type=int, default=4,
-                        help='number of ppo epochs (default: 4)')
-    parser.add_argument('--num-mini-batch', type=int, default=32,
-                        help='number of batches for ppo (default: 32)')
-    parser.add_argument('--clip-param', type=float, default=0.2,
-                        help='ppo clip parameter (default: 0.2)')
-    parser.add_argument('--num-stack', type=int, default=1,
-                        help='number of frames to stack (default: 1)')
 
     args = parser.parse_args()
 
