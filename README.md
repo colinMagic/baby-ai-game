@@ -7,7 +7,7 @@ The player can show to the agent some good trajectories to follow. The player ca
 
 "Teach me" button loads the current saved trajectories (from the folder) and should be used first before adding new trajectories.
 
-"Train" trains a CNN with a particular architecture (in [model/training.py]([model/training.py])) on the current loaded trajectories (loaded using "Teach me" + inserted by hand), for 100 epochs. It then tests on 100 environments with different seeds how successfull this behavioral cleaning is. Using "Train" again trains the same CNN and not a new model.
+"Train" trains a CNN with a particular architecture (in [model/training.py](model/training.py)) on the current loaded trajectories (loaded using "Teach me" + inserted by hand), for 100 epochs. It then tests on 100 environments with different seeds how successfull this behavioral cleaning is. Using "Train" again trains the same CNN and not a new model.
 
 "Test" tests the current model on 100 environments.
 
