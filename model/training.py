@@ -17,44 +17,73 @@ from torch.autograd import Variable
 from torch.distributions import Categorical
 
 class Model(nn.Module):
-    def __init__(self, input_size, num_actions):
+    def __init__(self, input_size, num_actions, lr=0.01, arch='cnn'):
         super().__init__()
 
         self.num_inputs = reduce(operator.mul, input_size, 1)
         self.num_actions = num_actions
+        self.arch = arch
+        if arch == 'mlp':
+            self.fc1 = nn.Linear(self.num_inputs, 128)
+            self.fc2 = nn.Linear(128, 64)
+            self.fc2bis = nn.Linear(64, 32)
+            self.fc3 = nn.Linear(32, num_actions)
+        if arch == 'cnn':
+            #input is 3x7x7
+            self.conv1 = nn.Conv2d(in_channels=3, out_channels=16,
+                                   kernel_size=(2, 2))
+            self.conv2 = nn.Conv2d(in_channels=16, out_channels=32,
+                                   kernel_size=(2,2))
+            self.conv3 = nn.Conv2d(in_channels=32, out_channels=64,
+                                   kernel_size=(2,2))
+            self.mp = nn.MaxPool2d(kernel_size=(2,2), stride=2)
+            self.fc = nn.Linear(64, num_actions)
 
-        self.fc1 = nn.Linear(self.num_inputs, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, num_actions)
-
-        self.optimizer = optim.SGD(
-            self.parameters(),
-            lr=0.0005,
-            momentum=0.4
-        )
+        self.optimizer = optim.Adam(self.parameters(), lr=lr)
 
     def forward(self, obs):
         image = obs['image']
+        if self.arch == 'mlp':
+            # FIXME: what's the unsqueeze for?
+            image = Variable(torch.from_numpy(image).float().unsqueeze(0))
 
-        # FIXME: what's the unsqueeze for?
-        image = Variable(torch.from_numpy(image).float().unsqueeze(0))
+            # Reshape the input so that it is one-dimensional
+            image = image.view(-1, self.num_inputs)
 
-        # Reshape the input so that it is one-dimensional
-        image = image.view(-1, self.num_inputs)
-
-        x = F.relu(self.fc1(image))
-        x = F.relu(self.fc2(x))
-        action_scores = self.fc3(x)
-        action_probs = F.softmax(action_scores, dim=1)
+            x = F.relu(self.fc1(image))
+            x = F.relu(self.fc2(x))
+            x = F.relu(self.fc2bis(x))
+            action_scores = self.fc3(x)
+            action_probs = F.softmax(action_scores, dim=1)
+        if self.arch == 'cnn':
+            x = self.transform_image(image)
+            x = Variable(torch.from_numpy(x).float().unsqueeze(0))
+            x = self.mp(F.relu(self.conv1(x)))
+            x = F.relu(self.conv2(x))
+            x = F.relu(self.conv3(x))
+            # x is now 64x1x1
+            x = x.squeeze(dim=2).squeeze(dim=2)
+            action_scores = self.fc(x)
+            action_probs = F.softmax(action_scores, dim=1)
 
         return action_probs
 
-    def select_action(self, obs):
-        action_probs = self.forward(obs)
+    def transform_image(self, image):
+        tr_image = np.transpose(image, (2,1,0))
+        ret_image = np.zeros(tr_image.shape)
+        ret_image[0] = 1./7 * tr_image[0]
+        ret_image[1] = 1./5 * tr_image[1]
+        ret_image[2] = tr_image[2]
+        return ret_image
 
-        dist = Categorical(action_probs)
-        action = dist.sample()
-        #log_prob = dist.log_prob(action)
+    def select_action(self, obs, sample=True):
+        action_probs = self.forward(obs)
+        if sample:
+            dist = Categorical(action_probs)
+            action = dist.sample()
+            #log_prob = dist.log_prob(action)
+        else:
+            _, action = torch.max(action_probs, 1)
 
         return action.data[0]
 
@@ -69,13 +98,17 @@ class Model(nn.Module):
         return log_prob
 
 class Rollout:
-    def __init__(self, seed):
+    def __init__(self, seed=0, action=None, obs=None):
+        if action is None:
+            action = []
+        if obs is None:
+            obs = []
         self.seed = seed
-        self.obs = []
-        self.action = []
-        self.reward = []
-        self.length = 0
-        self.total_reward = 0
+        self.obs = obs
+        self.action = action
+        self.reward = [] if not action else [0] * (len(action) - 1) + [1000 - len(action)]
+        self.length = len(action)
+        self.total_reward = 0 if not action else 1000 - len(action)
 
     def append(self, obs, action, reward):
         self.obs.append(obs)
@@ -83,6 +116,11 @@ class Rollout:
         self.reward.append(reward)
         self.length += 1
         self.total_reward += reward
+
+    def __repr__(self):
+        return str({'total_reward': self.total_reward,
+                'all': {i: (self.obs[i]['image'].max(axis=0).max(axis=0), self.action[i], self.reward[i]) for i in range(self.length)}
+                })
 
 def random_rollout(env, seed):
     env.seed(seed)
@@ -112,7 +150,7 @@ def equiv_rollout(env, r1):
         if len(r2.obs) <= len(r1.obs):
             return r2
 
-def run_model(model, env, seed, eps):
+def run_model(model, env, seed, eps=0, sample=True):
     env.seed(seed)
     obs = env.reset()
     rollout = Rollout(seed)
@@ -124,7 +162,7 @@ def run_model(model, env, seed, eps):
         if random.random() < eps:
             action = random.randint(0, env.action_space.n - 1)
         else:
-            action = model.select_action(obs)
+            action = model.select_action(obs, sample=sample)
 
         newObs, reward, done, info = env.step(action)
 
@@ -144,7 +182,7 @@ def cross_entropy(yHat, y):
 
 def train_model(model, rollout):
     losses = []
-
+    #print(rollout)
     for step in range(0, len(rollout.obs)):
         rollout_action = rollout.action[step]
         log_prob = model.action_log_prob(rollout.obs[step], rollout_action)

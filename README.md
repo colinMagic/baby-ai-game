@@ -2,6 +2,17 @@
 
 Prototype of a game where a reinforcement learning agent is trained through natural language instructions. This is a research project based at the [Montreal Institute for Learning Algorithms (MILA)](https://mila.quebec/en/).
 
+## Particular instructions for this branch
+The player can show to the agent some good trajectories to follow. The player can solve the missions by hand (using arrow keys), and then save the trajectories using the Save button. It automatically saves in the corresponding folder with a name that takes into account the particular environment.
+
+"Teach me" button loads the current saved trajectories (from the folder) and should be used first before adding new trajectories.
+
+"Train" trains a CNN with a particular architecture (in [model/training.py](model/training.py)) on the current loaded trajectories (loaded using "Teach me" + inserted by hand), for 100 epochs. It then tests on 100 environments with different seeds how successfull this behavioral cleaning is. Using "Train" again trains the same CNN and not a new model.
+
+"Test" tests the current model on 100 environments.
+
+ToDo: Maybe find a better stopping condition rather than "Train for 100 epochs". Maybe something like "train until loss doesn't go down by much"
+
 ## Instructions for Committers
 
 If you have been given write access to this repository, please avoid pushing

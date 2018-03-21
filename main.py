@@ -32,6 +32,7 @@ class AIGameWindow(QMainWindow):
 
         self.model = model
         self.rollouts = []
+        self.teacher_rollouts = []
         self.rollout = None
 
         self.stepTimer = QTimer()
@@ -93,14 +94,23 @@ class AIGameWindow(QMainWindow):
         self.stepsLabel.setMinimumSize(60, 10)
         resetBtn = QPushButton("Reset")
         resetBtn.clicked.connect(self.resetBtn)
+        getTchBtn = QPushButton("Teach me")
+        getTchBtn.clicked.connect(self.get_teacher_rollouts)
+        saveTchBtn = QPushButton("Save")
+        saveTchBtn.clicked.connect(self.save_teacher_rollouts)
         trainBtn = QPushButton("Train")
         trainBtn.clicked.connect(self.train)
+        try100timesBtn = QPushButton("Try")
+        try100timesBtn.clicked.connect(self.try100times)
         stepsBox = QHBoxLayout()
         stepsBox.addStretch(1)
         stepsBox.addWidget(QLabel("Steps remaining"))
         stepsBox.addWidget(self.stepsLabel)
         stepsBox.addWidget(resetBtn)
+        stepsBox.addWidget(getTchBtn)
         stepsBox.addWidget(trainBtn)
+        stepsBox.addWidget(try100timesBtn)
+        stepsBox.addWidget(saveTchBtn)
         stepsBox.addStretch(1)
 
         hline2 = QFrame()
@@ -133,7 +143,7 @@ class AIGameWindow(QMainWindow):
         slider = QSlider(Qt.Horizontal, self)
         slider.setFocusPolicy(Qt.NoFocus)
         slider.setMinimum(0)
-        slider.setMaximum(100)
+        slider.setMaximum(150)
         slider.setValue(0)
         slider.valueChanged.connect(self.setFrameRate)
 
@@ -203,13 +213,14 @@ class AIGameWindow(QMainWindow):
 
         #print('Set frame rate: %s' % value)
 
-        self.fpsLimit = int(value)
+        #self.fpsLimit = int(value)
+        self.fpsLimit = 50
 
         if value == 0:
             self.fpsLabel.setText("Manual")
             self.stepTimer.stop()
         else:
-            value = 5
+            #value = 50
             self.fpsLabel.setText("%s FPS" % value)
             self.stepTimer.setInterval(int(1000 / value))
             self.stepTimer.start()
@@ -222,7 +233,7 @@ class AIGameWindow(QMainWindow):
         self.clearFocus()
         self.resetEnv()
 
-    def resetEnv(self):
+    def resetEnv(self, teacher=False):
         seed = random.randint(0, 0xFFFFFFFF)
 
         self.env.seed(seed)
@@ -244,8 +255,12 @@ class AIGameWindow(QMainWindow):
         self.showEnv(obs)
 
         if self.rollout and self.rollout.total_reward > 0:
-            self.rollouts.append(self.rollout)
-            print('num rollouts: %d' % len(self.rollouts))
+            if not teacher:
+                self.rollouts.append(self.rollout)
+            if teacher:
+                self.teacher_rollouts.append(self.rollout)
+        print('num rollouts: %d' % len(self.rollouts))
+        print('num teacher rollouts: %d' % len(self.teacher_rollouts))
 
         self.rollout = Rollout(seed)
 
@@ -255,35 +270,75 @@ class AIGameWindow(QMainWindow):
         self.env.seed(seed)
         self.resetEnv()
 
+    def get_teacher_rollouts(self):
+        import pickle
+        try:
+            rollouts = pickle.load(open('teacher_rollouts/teacher_rollouts_{0}.pkl'.format(str(self.env)), 'rb'))
+            rollouts = [Rollout(obs=rol[0], action=rol[1]) for rol in rollouts]
+            self.teacher_rollouts = rollouts
+            print("we now have {0} teacher rollouts".format(len(self.teacher_rollouts)))
+        except Exception:
+            print("Can't add teacher rollouts")
+
+    def save_teacher_rollouts(self):
+        import pickle
+        try:
+            rollouts = [(rol.obs, rol.action) for rol in self.teacher_rollouts]
+            print("saving {0} rollouts".format(len(rollouts)))
+            pickle.dump(rollouts, open('teacher_rollouts/teacher_rollouts_{0}.pkl'.format(str(self.env)), 'wb'))
+        except Exception as e:
+            print(e)
+            print("Can't save teacher rollouts")
+
     def train(self):
         for i in range(0, 100):
             total_loss = 0
-            for r in self.rollouts:
+            for r in self.teacher_rollouts:
                 total_loss += train_model(self.model, r)
-            print(total_loss / len(self.rollouts))
+            print(total_loss / len(self.teacher_rollouts))
 
-        if len(self.rollouts) < 3:
+        if len(self.teacher_rollouts) < 3:
             return
 
-        seed = random.randint(0, 0xFFFFFFFF)
-        best_rollout = Rollout(0)
+        
+        best_rollout = Rollout(0) #initialize a rollout object 
         num_success = 0
 
         for j in range(0, 100):
+            seed = random.randint(0, 0xFFFFFFFF)
             rollout = run_model(self.model, self.env, seed, eps=0)
 
             if rollout.total_reward > best_rollout.total_reward:
                 best_rollout = rollout
+                # Salem: I guess that a success should be whenever the baby gets the reward
+                # and not just when she gets the best reward. Idk
+                # num_success += 1
+            if rollout.total_reward > 0:
                 num_success += 1
+                self.rollouts.append(rollout)
 
-        print('num success: %d' % num_success)
+        print('%d successes out of 100' % num_success)
 
-        if best_rollout.total_reward > 0:
-            self.rollouts.append(best_rollout)
+        #if best_rollout.total_reward > 0:
+        #    self.rollouts.append(best_rollout)
 
-        print('num rollouts: %d' % len(self.rollouts))
+        #print('num rollouts: %d' % len(self.rollouts))
 
         self.resetEnv()
+
+    def try100times(self):
+        num_success = 0
+        sum_rewards = 0
+
+        for j in range(0, 100):
+            seed = random.randint(0, 0xFFFFFFFF)
+            rollout = run_model(self.model, self.env, seed, eps=0)
+            sum_rewards += rollout.total_reward
+            if rollout.total_reward > 0:
+                num_success += 1
+                self.rollouts.append(rollout)
+
+        print("{0} successes out of 100, {1} average reward".format(num_success, sum_rewards/100.))
 
     def showEnv(self, obs):
         unwrapped = self.env.unwrapped
@@ -312,15 +367,17 @@ class AIGameWindow(QMainWindow):
             text = self.missionBox.toPlainText()
             self.lastObs['mission'] = text
 
+        teacher = True
         # If no manual action was specified by the user
         if action == None:
+            teacher = False
             action = self.model.select_action(self.lastObs)
 
         obs, reward, done, info = self.env.step(action)
 
         if self.rollout:
             self.rollout.append(self.lastObs, action, reward)
-            print('action=%s, reward=%s' % (action, reward))
+            #print('action=%s, reward=%s' % (action, reward))
 
         if not isinstance(obs, dict):
             obs = { 'image': obs, 'mission': '' }
@@ -329,7 +386,7 @@ class AIGameWindow(QMainWindow):
         self.lastObs = obs
 
         if done:
-            self.resetEnv()
+            self.resetEnv(teacher)
 
     def stepLoop(self):
         """Auto stepping loop, runs in its own thread"""
@@ -356,8 +413,12 @@ def main(argv):
     (options, args) = parser.parse_args()
 
     # Load the gym environment
+    #print(options.env_name)
     env = gym.make(options.env_name)
-
+    #print(str(env))
+    #print(env.observation_space)
+    #print(env.observation_space.spaces['image'])
+    #print(env.action_space.n)
     model = Model(
         env.observation_space.spaces['image'].shape,
         env.action_space.n
