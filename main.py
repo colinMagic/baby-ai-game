@@ -9,7 +9,7 @@ from optparse import OptionParser
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget
 from PyQt5.QtWidgets import QLabel, QTextEdit, QFrame
-from PyQt5.QtWidgets import QPushButton, QSlider, QHBoxLayout, QVBoxLayout
+from PyQt5.QtWidgets import QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QMenu
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor
 
 import gym
@@ -33,6 +33,7 @@ class AIGameWindow(QMainWindow):
         self.model = model
         self.rollouts = []
         self.teacher_rollouts = []
+        self.train_rollouts = []
         self.rollout = None
 
         self.stepTimer = QTimer()
@@ -98,20 +99,42 @@ class AIGameWindow(QMainWindow):
         getTchBtn.clicked.connect(self.get_teacher_rollouts)
         saveTchBtn = QPushButton("Save")
         saveTchBtn.clicked.connect(self.save_teacher_rollouts)
-        trainBtn = QPushButton("Train")
-        trainBtn.clicked.connect(self.train)
-        try100timesBtn = QPushButton("Try")
-        try100timesBtn.clicked.connect(self.try100times)
+
         stepsBox = QHBoxLayout()
         stepsBox.addStretch(1)
         stepsBox.addWidget(QLabel("Steps remaining"))
         stepsBox.addWidget(self.stepsLabel)
         stepsBox.addWidget(resetBtn)
         stepsBox.addWidget(getTchBtn)
-        stepsBox.addWidget(trainBtn)
-        stepsBox.addWidget(try100timesBtn)
         stepsBox.addWidget(saveTchBtn)
         stepsBox.addStretch(1)
+
+        trainBtn = QPushButton("Train")
+        menu = QMenu()
+        menu.addAction('100 epochs', self.train)
+        menu.addAction('Reset (MLP)', lambda: self.resetModel(arch='mlp'))
+        menu.addAction('Reset (CNN)', lambda: self.resetModel(arch='cnn'))
+        trainBtn.setMenu(menu)
+        try100timesBtn = QPushButton("Try")
+        try100timesBtn.clicked.connect(self.try100times)
+        trainslider = QSlider(Qt.Horizontal, self)
+        trainslider.setFocusPolicy(Qt.NoFocus)
+        trainslider.setMinimum(0)
+        trainslider.setMaximum(100)
+        trainslider.setValue(100)
+        trainslider.valueChanged.connect(self.set_train_rollouts)
+        self.percentageLabel = QLabel("100%")
+        self.percentageLabel.setFrameStyle(QFrame.Panel | QFrame.Sunken)
+        #self.percentageLabel.setAlignment(Qt.AlignCenter)
+        #self.percentageLabel.setMinimumSize(80, 10)
+
+        trainingBox = QHBoxLayout()
+        trainingBox.addStretch(1)
+        trainingBox.addWidget(trainslider)
+        trainingBox.addWidget(self.percentageLabel)
+        trainingBox.addWidget(trainBtn)
+        trainingBox.addWidget(try100timesBtn)
+        trainingBox.addStretch(1)
 
         hline2 = QFrame()
         hline2.setFrameShape(QFrame.HLine)
@@ -121,6 +144,7 @@ class AIGameWindow(QMainWindow):
         vbox = QVBoxLayout()
         vbox.addLayout(miniViewBox)
         vbox.addLayout(stepsBox)
+        vbox.addLayout(trainingBox)
         vbox.addWidget(hline2)
         vbox.addWidget(QLabel("General mission"))
         vbox.addWidget(self.missionBox)
@@ -290,14 +314,23 @@ class AIGameWindow(QMainWindow):
             print(e)
             print("Can't save teacher rollouts")
 
-    def train(self):
-        for i in range(0, 100):
-            total_loss = 0
-            for r in self.teacher_rollouts:
-                total_loss += train_model(self.model, r)
-            print(total_loss / len(self.teacher_rollouts))
+    def set_train_rollouts(self, percentage):
+        ratio = percentage/100.
+        size_rollouts = len(self.teacher_rollouts)
+        sample_indices = random.sample(list(range(size_rollouts)), int(ratio * size_rollouts))
+        self.train_rollouts = [self.teacher_rollouts[i] for i in sample_indices]
+        self.percentageLabel.setText("{0}%".format(percentage))
+        print('Using {0} rollouts for training chosen randomly'.format(len(self.train_rollouts)))
 
-        if len(self.teacher_rollouts) < 3:
+    def train(self, n_epochs=100):
+        for i in range(0, n_epochs):
+            total_loss = 0
+            for r in self.train_rollouts:
+                total_loss += train_model(self.model, r)
+            print("epoch {0}/{1}: {2}".format(i + 1, n_epochs,
+                                              total_loss / len(self.train_rollouts)))
+
+        if len(self.train_rollouts) < 3:
             return
 
         
@@ -403,6 +436,12 @@ class AIGameWindow(QMainWindow):
 
             self.stepEnv()
 
+    def resetModel(self, arch='cnn'):
+        self.model = Model(self.env.observation_space.spaces['image'].shape,
+                           self.env.action_space.n,
+                           arch=arch)
+        print("Model reset")
+        print(self.model)
 def main(argv):
     parser = OptionParser()
     parser.add_option(
