@@ -1,41 +1,26 @@
 #!/usr/bin/env python3
 
+import random
 import time
 import sys
 import threading
-import copy
-import random
 from optparse import OptionParser
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QInputDialog
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget
 from PyQt5.QtWidgets import QLabel, QTextEdit, QFrame
-from PyQt5.QtWidgets import QPushButton, QSlider, QHBoxLayout, QVBoxLayout
+from PyQt5.QtWidgets import QPushButton, QSlider, QHBoxLayout, QVBoxLayout, QMenu
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QColor
 
-# Gym environment used by the Baby AI Game
 import gym
 import gym_minigrid
-from gym_minigrid import minigrid
 
-import levels
-import agents
-
-class ImgWidget(QLabel):
-    """
-    Widget to intercept clicks on the full image view
-    """
-    def __init__(self, window):
-        super().__init__()
-        self.window = window
-
-    def mousePressEvent(self, event):
-        self.window.imageClick(event.x(), event.y())
+from model.training import Model, Rollout, train_model, eval_model, run_model
 
 class AIGameWindow(QMainWindow):
     """Application window for the baby AI game"""
 
-    def __init__(self, env):
+    def __init__(self, env, model):
         super().__init__()
         self.initUI()
 
@@ -45,15 +30,18 @@ class AIGameWindow(QMainWindow):
         self.env = env
         self.lastObs = None
 
-        self.resetEnv()
+        self.model = model
+        self.rollouts = []
+        self.teacher_rollouts = []
+        self.train_rollouts = []
+        self.rollout = None
 
         self.stepTimer = QTimer()
         self.stepTimer.setInterval(0)
         self.stepTimer.setSingleShot(False)
         self.stepTimer.timeout.connect(self.stepClicked)
 
-        # Pointing and naming data
-        self.pointingData = []
+        self.resetEnv()
 
     def initUI(self):
         """Create and connect the UI elements"""
@@ -62,7 +50,7 @@ class AIGameWindow(QMainWindow):
         self.setWindowTitle('Baby AI Game')
 
         # Full render view (large view)
-        self.imgLabel = ImgWidget(self)
+        self.imgLabel = QLabel()
         self.imgLabel.setFrameStyle(QFrame.Panel | QFrame.Sunken)
         leftBox = QVBoxLayout()
         leftBox.addStretch(1)
@@ -106,13 +94,47 @@ class AIGameWindow(QMainWindow):
         self.stepsLabel.setAlignment(Qt.AlignCenter)
         self.stepsLabel.setMinimumSize(60, 10)
         resetBtn = QPushButton("Reset")
-        resetBtn.clicked.connect(self.resetEnv)
+        resetBtn.clicked.connect(self.resetBtn)
+        getTchBtn = QPushButton("Teach me")
+        getTchBtn.clicked.connect(self.get_teacher_rollouts)
+        saveTchBtn = QPushButton("Save")
+        saveTchBtn.clicked.connect(self.save_teacher_rollouts)
+
         stepsBox = QHBoxLayout()
         stepsBox.addStretch(1)
         stepsBox.addWidget(QLabel("Steps remaining"))
         stepsBox.addWidget(self.stepsLabel)
         stepsBox.addWidget(resetBtn)
+        stepsBox.addWidget(getTchBtn)
+        stepsBox.addWidget(saveTchBtn)
         stepsBox.addStretch(1)
+
+        trainBtn = QPushButton("Train")
+        menu = QMenu()
+        menu.addAction('100 epochs', self.train)
+        menu.addAction('Reset (MLP)', lambda: self.resetModel(arch='mlp'))
+        menu.addAction('Reset (CNN)', lambda: self.resetModel(arch='cnn'))
+        trainBtn.setMenu(menu)
+        try100timesBtn = QPushButton("Try")
+        try100timesBtn.clicked.connect(self.try100times)
+        trainslider = QSlider(Qt.Horizontal, self)
+        trainslider.setFocusPolicy(Qt.NoFocus)
+        trainslider.setMinimum(0)
+        trainslider.setMaximum(100)
+        trainslider.setValue(100)
+        trainslider.valueChanged.connect(self.set_train_rollouts)
+        self.percentageLabel = QLabel("100%")
+        self.percentageLabel.setFrameStyle(QFrame.Panel | QFrame.Sunken)
+        #self.percentageLabel.setAlignment(Qt.AlignCenter)
+        #self.percentageLabel.setMinimumSize(80, 10)
+
+        trainingBox = QHBoxLayout()
+        trainingBox.addStretch(1)
+        trainingBox.addWidget(trainslider)
+        trainingBox.addWidget(self.percentageLabel)
+        trainingBox.addWidget(trainBtn)
+        trainingBox.addWidget(try100timesBtn)
+        trainingBox.addStretch(1)
 
         hline2 = QFrame()
         hline2.setFrameShape(QFrame.HLine)
@@ -122,8 +144,9 @@ class AIGameWindow(QMainWindow):
         vbox = QVBoxLayout()
         vbox.addLayout(miniViewBox)
         vbox.addLayout(stepsBox)
+        vbox.addLayout(trainingBox)
         vbox.addWidget(hline2)
-        vbox.addWidget(QLabel("Mission"))
+        vbox.addWidget(QLabel("General mission"))
         vbox.addWidget(self.missionBox)
         vbox.addLayout(buttonBox)
 
@@ -144,7 +167,7 @@ class AIGameWindow(QMainWindow):
         slider = QSlider(Qt.Horizontal, self)
         slider.setFocusPolicy(Qt.NoFocus)
         slider.setMinimum(0)
-        slider.setMaximum(100)
+        slider.setMaximum(150)
         slider.setValue(0)
         slider.valueChanged.connect(self.setFrameRate)
 
@@ -167,123 +190,30 @@ class AIGameWindow(QMainWindow):
         return hbox
 
     def keyPressEvent(self, e):
-        # Manual agent control
         actions = self.env.unwrapped.actions
-
         if e.key() == Qt.Key_Left:
             self.stepEnv(actions.left)
         elif e.key() == Qt.Key_Right:
             self.stepEnv(actions.right)
         elif e.key() == Qt.Key_Up:
             self.stepEnv(actions.forward)
-
-        elif e.key() == Qt.Key_PageUp:
-            self.stepEnv(actions.pickup)
-        elif e.key() == Qt.Key_PageDown:
-            self.stepEnv(actions.drop)
         elif e.key() == Qt.Key_Space:
             self.stepEnv(actions.toggle)
 
-        elif e.key() == Qt.Key_Backspace:
-            self.resetEnv()
-        elif e.key() == Qt.Key_Escape:
-            self.close()
-
     def mousePressEvent(self, event):
-        """
-        Clear the focus of the text boxes and buttons if somewhere
-        else on the window is clicked
-        """
-
-        # Set the focus on the full render image
-        self.imgLabel.setFocus()
-
+        self.clearFocus()
         QMainWindow.mousePressEvent(self, event)
 
-    def imageClick(self, x, y):
+    def clearFocus(self):
         """
-        Pointing and naming logic
+        Clear the focus of the text boxes and buttons
         """
 
-        # Set the focus on the full render image
-        self.imgLabel.setFocus()
+        # Get the object currently in focus
+        focused = QApplication.focusWidget()
 
-        env = self.env.unwrapped
-        imgW = self.imgLabel.size().width()
-        imgH = self.imgLabel.size().height()
-
-        i = (env.grid.width * x) // imgW
-        j = (env.grid.height * y) // imgH
-        assert i < env.grid.width
-        assert j < env.grid.height
-
-        print('grid clicked: i=%d, j=%d' % (i, j))
-
-        desc, ok = QInputDialog.getText(self, 'Pointing & Naming', 'Enter Description:')
-        desc = str(desc)
-
-        if not ok or len(desc) == 0:
-            return
-
-        pointObj = env.grid.get(i, j)
-
-        if pointObj is None:
-            return
-
-        print('description: "%s"' % desc)
-        print('object: %s %s' % (pointObj.color, pointObj.type))
-
-        viewSz = minigrid.AGENT_VIEW_SIZE
-
-        NUM_TARGET = 50
-        numItrs = 0
-        numPos = 0
-        numNeg = 0
-
-        while (numPos < NUM_TARGET or numNeg < NUM_TARGET) and numItrs < 300:
-            env2 = copy.deepcopy(env)
-
-            # Randomly place the agent around the selected point
-            x, y = i, j
-            x += random.randint(-viewSz, viewSz)
-            y += random.randint(-viewSz, viewSz)
-            x = max(0, min(x, env2.grid.width - 1))
-            y = max(0, min(y, env2.grid.height - 1))
-            env2.agentPos = (x, y)
-            env2.agentDir = random.randint(0, 3)
-
-            # Don't want to place the agent on top of something
-            if env2.grid.get(*env2.agentPos) != None:
-                continue
-
-            agentSees = env2.agentSees(i, j)
-
-            obs, _, _, _ = env2.step(env2.actions.wait)
-            img = obs['image'] if isinstance(obs, dict) else obs
-            obsGrid = minigrid.Grid.decode(img)
-
-            datum = {
-                'desc': desc,
-                'img': img,
-                'pos': (i, j),
-                'present': agentSees
-            }
-
-            if agentSees and numPos < NUM_TARGET:
-                self.pointingData.append(datum)
-                numPos += 1
-
-            if not agentSees and numNeg < NUM_TARGET:
-                # Don't want identical object in mismatch examples
-                if (pointObj.color, pointObj.type) not in obsGrid:
-                    self.pointingData.append(datum)
-                    numNeg += 1
-
-            numItrs += 1
-
-        print('positive examples: %d' % numPos)
-        print('negative examples: %d' % numNeg)
-        print('total examples: %d' % len(self.pointingData))
+        if isinstance(focused, (QPushButton, QTextEdit)):
+            focused.clearFocus()
 
     def missionEdit(self):
         # The agent will get the mission as an observation
@@ -305,28 +235,143 @@ class AIGameWindow(QMainWindow):
     def setFrameRate(self, value):
         """Set the frame rate limit. Zero for manual stepping."""
 
-        print('Set frame rate: %s' % value)
+        #print('Set frame rate: %s' % value)
 
-        self.fpsLimit = int(value)
+        #self.fpsLimit = int(value)
+        self.fpsLimit = 50
 
         if value == 0:
             self.fpsLabel.setText("Manual")
             self.stepTimer.stop()
-
-        elif value == 100:
-            self.fpsLabel.setText("Fastest")
-            self.stepTimer.setInterval(0)
-            self.stepTimer.start()
-
         else:
+            #value = 50
             self.fpsLabel.setText("%s FPS" % value)
-            self.stepTimer.setInterval(int(1000 / self.fpsLimit))
+            self.stepTimer.setInterval(int(1000 / value))
             self.stepTimer.start()
 
-    def resetEnv(self):
+        self.rollout = None
+        self.resetEnv()
+        self.clearFocus()
+
+    def resetBtn(self):
+        self.clearFocus()
+        self.resetEnv()
+
+    def resetEnv(self, teacher=False):
+        seed = random.randint(0, 0xFFFFFFFF)
+
+        self.env.seed(seed)
         obs = self.env.reset()
+
+        if not isinstance(obs, dict):
+            obs = { 'image': obs, 'mission': '' }
+
+        # If no mission is specified
+        if obs['mission']:
+            mission = obs['mission']
+        else:
+            mission = "Get to the green goal square"
+
         self.lastObs = obs
+
+        self.missionBox.setPlainText(mission)
+
         self.showEnv(obs)
+
+        if self.rollout and self.rollout.total_reward > 0:
+            if not teacher:
+                self.rollouts.append(self.rollout)
+            if teacher:
+                self.teacher_rollouts.append(self.rollout)
+        print('num rollouts: %d' % len(self.rollouts))
+        print('num teacher rollouts: %d' % len(self.teacher_rollouts))
+
+        self.rollout = Rollout(seed)
+
+    def reseedEnv(self):
+        import random
+        seed = random.randint(0, 0xFFFFFFFF)
+        self.env.seed(seed)
+        self.resetEnv()
+
+    def get_teacher_rollouts(self):
+        import pickle
+        try:
+            rollouts = pickle.load(open('teacher_rollouts/teacher_rollouts_{0}.pkl'.format(str(self.env)), 'rb'))
+            rollouts = [Rollout(obs=rol[0], action=rol[1]) for rol in rollouts]
+            self.teacher_rollouts = rollouts
+            print("we now have {0} teacher rollouts".format(len(self.teacher_rollouts)))
+        except Exception:
+            print("Can't add teacher rollouts")
+
+    def save_teacher_rollouts(self):
+        import pickle
+        try:
+            rollouts = [(rol.obs, rol.action) for rol in self.teacher_rollouts]
+            print("saving {0} rollouts".format(len(rollouts)))
+            pickle.dump(rollouts, open('teacher_rollouts/teacher_rollouts_{0}.pkl'.format(str(self.env)), 'wb'))
+        except Exception as e:
+            print(e)
+            print("Can't save teacher rollouts")
+
+    def set_train_rollouts(self, percentage):
+        ratio = percentage/100.
+        size_rollouts = len(self.teacher_rollouts)
+        sample_indices = random.sample(list(range(size_rollouts)), int(ratio * size_rollouts))
+        self.train_rollouts = [self.teacher_rollouts[i] for i in sample_indices]
+        self.percentageLabel.setText("{0}%".format(percentage))
+        print('Using {0} rollouts for training chosen randomly'.format(len(self.train_rollouts)))
+
+    def train(self, n_epochs=100):
+        for i in range(0, n_epochs):
+            total_loss = 0
+            for r in self.train_rollouts:
+                total_loss += train_model(self.model, r)
+            print("epoch {0}/{1}: {2}".format(i + 1, n_epochs,
+                                              total_loss / len(self.train_rollouts)))
+
+        if len(self.train_rollouts) < 3:
+            return
+
+        
+        best_rollout = Rollout(0) #initialize a rollout object 
+        num_success = 0
+
+        for j in range(0, 100):
+            seed = random.randint(0, 0xFFFFFFFF)
+            rollout = run_model(self.model, self.env, seed, eps=0)
+
+            if rollout.total_reward > best_rollout.total_reward:
+                best_rollout = rollout
+                # Salem: I guess that a success should be whenever the baby gets the reward
+                # and not just when she gets the best reward. Idk
+                # num_success += 1
+            if rollout.total_reward > 0:
+                num_success += 1
+                self.rollouts.append(rollout)
+
+        print('%d successes out of 100' % num_success)
+
+        #if best_rollout.total_reward > 0:
+        #    self.rollouts.append(best_rollout)
+
+        #print('num rollouts: %d' % len(self.rollouts))
+
+        self.resetEnv()
+
+    def try100times(self):
+        num_success = 0
+        sum_rewards = 0
+
+        for j in range(0, 100):
+            seed = random.randint(0, 0xFFFFFFFF)
+            rollout = run_model(self.model, self.env, seed, eps=0)
+            sum_rewards += rollout.total_reward
+            if rollout.total_reward > 0:
+                num_success += 1
+                self.rollouts.append(rollout)
+
+        print("{0} successes out of 100, {1} average reward".format(num_success, sum_rewards/100.))
 
     def showEnv(self, obs):
         unwrapped = self.env.unwrapped
@@ -349,33 +394,78 @@ class AIGameWindow(QMainWindow):
         self.stepsLabel.setText(str(stepsRem))
 
     def stepEnv(self, action=None):
+        # If the environment doesn't supply a mission, get the
+        # mission from the input text box
+        if not hasattr(self.lastObs, 'mission'):
+            text = self.missionBox.toPlainText()
+            self.lastObs['mission'] = text
+
+        teacher = True
         # If no manual action was specified by the user
         if action == None:
-            action = random.randint(0, self.env.action_space.n - 1)
+            teacher = False
+            action = self.model.select_action(self.lastObs)
 
         obs, reward, done, info = self.env.step(action)
+
+        if self.rollout:
+            self.rollout.append(self.lastObs, action, reward)
+            #print('action=%s, reward=%s' % (action, reward))
+
+        if not isinstance(obs, dict):
+            obs = { 'image': obs, 'mission': '' }
 
         self.showEnv(obs)
         self.lastObs = obs
 
         if done:
-            self.resetEnv()
+            self.resetEnv(teacher)
 
+    def stepLoop(self):
+        """Auto stepping loop, runs in its own thread"""
+
+        print('stepLoop')
+
+        while True:
+            if self.fpsLimit == 0:
+                time.sleep(0.1)
+                continue
+
+            if self.fpsLimit < 100:
+                time.sleep(0.1)
+
+            self.stepEnv()
+
+    def resetModel(self, arch='cnn'):
+        self.model = Model(self.env.observation_space.spaces['image'].shape,
+                           self.env.action_space.n,
+                           arch=arch)
+        print("Model reset")
+        print(self.model)
 def main(argv):
     parser = OptionParser()
     parser.add_option(
         "--env-name",
         help="gym environment to load",
-        default='MiniGrid-MultiRoom-N6-v0'
+        default='MiniGrid-DoorKey-8x8-v0'
     )
     (options, args) = parser.parse_args()
 
     # Load the gym environment
+    #print(options.env_name)
     env = gym.make(options.env_name)
+    #print(str(env))
+    #print(env.observation_space)
+    #print(env.observation_space.spaces['image'])
+    #print(env.action_space.n)
+    model = Model(
+        env.observation_space.spaces['image'].shape,
+        env.action_space.n
+    )
 
     # Create the application window
     app = QApplication(sys.argv)
-    window = AIGameWindow(env)
+    window = AIGameWindow(env, model)
 
     # Run the application
     sys.exit(app.exec_())

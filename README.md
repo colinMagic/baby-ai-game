@@ -1,17 +1,42 @@
 # Baby AI Game
 
-[![Build Status](https://travis-ci.org/maximecb/baby-ai-game.svg?branch=master)](https://travis-ci.org/maximecb/baby-ai-game)
-
 Prototype of a game where a reinforcement learning agent is trained through natural language instructions. This is a research project based at the [Montreal Institute for Learning Algorithms (MILA)](https://mila.quebec/en/).
+
+## Particular instructions for this branch
+The player can show to the agent some good trajectories to follow. The player can solve the missions by hand (using arrow keys), and then save the trajectories using the Save button. It automatically saves in the corresponding folder with a name that takes into account the particular environment.
+
+"Teach me" button loads the current saved trajectories (from the folder) and should be used first before adding new trajectories.
+
+"Train" trains a CNN with a particular architecture (in [model/training.py](model/training.py)) on the current loaded trajectories (loaded using "Teach me" + inserted by hand), for 100 epochs. It then tests on 100 environments with different seeds how successfull this behavioral cleaning is. Using "Train" again trains the same CNN and not a new model.
+
+"Test" tests the current model on 100 environments.
+
+ToDo: Maybe find a better stopping condition rather than "Train for 100 epochs". Maybe something like "train until loss doesn't go down by much"
+
+## Instructions for Committers
+
+If you have been given write access to this repository, please avoid pushing
+commits to the `master` branch directly, and instead create your own branch
+using the `git checkout -b <branch_name>` command. This will allow everyone to
+run their own experiments and structure their code as they see fit, without
+interfering with the work of others.
+
+If you have found a bug, or would like to request a change or improvement
+to the grid world environment or user interface, please
+[open an issue](https://github.com/maximecb/baby-ai-game/issues)
+on this repository. The master branch is meant to serve as a blank template
+to get people started with their research. Changes to the master branch should
+be made by creating a pull request, please avoid directly pushing commits to it.
 
 ## Installation
 
 Requirements:
-- Python 3.5+
+- Python 3
 - OpenAI gym
-- NumPy
+- numpy
 - PyQT5
 - PyTorch
+- matplotlib
 
 Start by manually installing PyTorch. See the [PyTorch website](http://pytorch.org/)
 for installation instructions specific to your platform.
@@ -33,34 +58,21 @@ cd baby-ai-game
 pip3 install -e .
 ```
 
-### For conda users
-
-If you are using conda, you can create a `babyai` environment with all the dependencies by running:
+Optionally, if you wish use the reinforcement learning code included
+under [/pytorch_rl](/pytorch_rl), you can install its dependencies as follows:
 
 ```
-conda env create -f envoriment.yaml
+cd pytorch_rl
+
+# PyTorch
+conda install pytorch torchvision -c soumith
+
+# Other requirements
+pip3 install -r requirements.txt
 ```
 
-Having done that, you can either add `baby-ai-game` and `gym-minigrid` in your `$PYTHONPATH` or install them in the development mode as suggested above.
-
-## Structure of the Codebase
-
-The `levels` directory will contain all the code relevant to the generation of levels and missions. Essentially, this implements the test task for the Baby AI Game. This is an importable module which people can use on its own to perform experiments.
-
-The `agents` directory will contain a default implementation of one or more agents to be evaluated on the baby AI game. This should also be importable as an independent module. Each agent will need to support methods to be provided teaching inputs using pointing and naming, as well as demonstrations.
-
-In `pytorch_rl`, there is an implementation of the A2C, PPO and ACKTR reinforcement learning algorithms. This is a custom fork of [this repository](https://github.com/ikostrikov/pytorch-a2c-ppo-acktr) which has been adapted to work with the `gym-minigrid` environment. This RL implementation has issues and will hopefully be replaced by a better one soon. One important problem, for instance, is that it is not importable as a module.
-
-The `main.py` script implements a template of a user interface for interactive human teaching. The version found in the master branch allows you to control the agent manually with the arrow keys, but it is not currently connected to any model or teaching code. Currently, most experiments are done offline, without a user interface.
-
-## Instructions for Committers
-
-To contribute to this project, you should first create your own fork, and remember to periodically [sync changes from this repository](https://stackoverflow.com/questions/7244321/how-do-i-update-a-github-forked-repository). You can then create [pull requests](https://yangsu.github.io/pull-request-tutorial/) for modifications you have made. Your changes will be tested and reviewed before they are merged into this repository. If you are not familiar with forks and pull requests, I recommend doing a Google or YouTube search to find many useful tutorials on the issue. Knowing how to use git and GitHub effectively are valuable skills for any programmer.
-
-If you have found a bug, or would like to request a change or improvement
-to the grid world environment or user interface, please
-[open an issue](https://github.com/maximecb/baby-ai-game/issues)
-on this repository. For bug reports, please paste complete error messages and describe your system configuration (are you running on Mac, Linux?).
+Note: the pytorch_rl code is a custom fork of [this repository](https://github.com/ikostrikov/pytorch-a2c-ppo-acktr),
+which was modified to work with this environment.
 
 ## Usage
 
@@ -83,26 +95,8 @@ You can perform training using the A2C algorithm with:
 python3 pytorch_rl/main.py --env-name MiniGrid-Empty-6x6-v0 --no-vis --num-processes 48 --algo a2c
 ```
 
-In order to Use the teacher environment with pytorch_rl, use the following command :
-```
-python3 pytorch_rl/main.py --env-name MultiRoom-Teacher --no-vis --num-processes 48 --algo a2c
-```
-
-Note: the pytorch_rl code is a custom fork of [this repository](https://github.com/ikostrikov/pytorch-a2c-ppo-acktr),
-which was modified to work with this environment.
-
 To see the available environments and their implementation, please have a look at
 the [gym_minigrid](https://github.com/maximecb/gym-minigrid) repository.
-
-### Usage at MILA
-
-If you connect to the lab machines by ssh-ing, make sure to use `ssh -X` in order to see the game window. This will work even for a chain of ssh connections, as long as you use `ssh -X` at all intermediate steps. If you use screen, set `$DISPLAY` variable manually inside each of your screen terminals. You can find the right value for `$DISPLAY` by detaching from you screen first (`Ctrl+A+D`) and then running `echo $DISPLAY`.
-
-The code does not work in conda, install everything with `pip install --user`.
-
-### Troubleshooting
-
-If you run into error messages relating to OpenAI gym or PyQT, it may be that the version of those libraries that you have installed is incompatible. You can try upgrading specific libraries with pip3, eg: `pip3 install --upgrade gym`. If the problem persists, please [open an issue](https://github.com/maximecb/baby-ai-game/issues) on this repository and paste a *complete* error message, along with some information about your platform (are you running Windows, Mac, Linux? Are you running this on a MILA machine?).
 
 ## About this Project
 
@@ -129,9 +123,9 @@ allow them to learn from human agents. With respect to build-in knowledge,
 Yoshua Bengio believes that the ability for agents to understand pointing
 gestures in combination with language may be key.
 
-## Relevant Materials
+*TODO: find child development articles about pointing and naming if possible. If anyone can find this, please submit a PR.*
 
-A work-in-progress review of related work can be found [here](https://www.overleaf.com/13480997qqsxybgstxhg#/52042269/)
+## Relevant Materials
 
 ### Agents and Language
 
