@@ -11,6 +11,10 @@ The player can show to the agent some good trajectories to follow. The player ca
 
 "Test" tests the current model on 100 environments.
 
+For each environment, the trajectories are saved in a pickle file. Loading the file yields a list of tuples (list of observations, list of actions). These are used to create a rollout instance (implemented in [model/training.py](model/trainining.py)).
+
+The training is done thanks to the *train_model* function in [model/training.py](model/training.py), but the functions in the notebook make it easier to train once you have more rollouts.
+
 ToDo: Maybe find a better stopping condition rather than "Train for 100 epochs". Maybe something like "train until loss doesn't go down by much"
 
 ## Instructions for Committers
