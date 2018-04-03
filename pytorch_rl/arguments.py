@@ -43,8 +43,8 @@ def get_args():
                         help='log interval, one log per n updates (default: 10)')
     parser.add_argument('--save-interval', type=int, default=100,
                         help='save interval, one save per n updates (default: 10)')
-    parser.add_argument('--vis-interval', type=int, default=100,
-                        help='vis interval, one log per n updates (default: 100)')
+    parser.add_argument('--vis-interval', type=int, default=10,
+                        help='vis interval, one log per n updates')
     parser.add_argument('--num-frames', type=int, default=10e6,
                         help='number of frames to train (default: 10e6)')
     parser.add_argument('--env-name', default='PongNoFrameskip-v4',
@@ -55,7 +55,7 @@ def get_args():
                         help='directory to save agent logs (default: ./trained_models/)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
-    parser.add_argument('--recurrent-policy', action='store_true', default=False,
+    parser.add_argument('--recurrent-policy', action='store_true', default=True,
                         help='use a recurrent policy')
     parser.add_argument('--no-vis', action='store_true', default=False,
                         help='disables visdom visualization')
